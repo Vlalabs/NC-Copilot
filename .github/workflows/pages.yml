@@ -1,7 +1,9 @@
 name: Publish interactive demo
 
-# Explicitly started by the repository owner; pushing code does not publish a site.
+# The user requested automatic publication so the demo can be opened directly.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -31,7 +31,7 @@ The cloud environment onboarding screen does not display interactive app preview
 2. Open **Actions → Publish interactive demo → Run workflow**, select `main`, and start the workflow.
 3. When deployment completes, open the URL provided by the `github-pages` environment or the workflow deployment summary.
 
-The workflow is manual: code pushes do not automatically publish a site. It builds for the `/NC-Copilot/` subdirectory and publishes the compiled frontend. Browser case data remains local to each visitor.
+The workflow runs on pushes to `main` and can also be started manually. It builds for the `/NC-Copilot/` subdirectory and publishes the compiled frontend. Browser case data remains local to each visitor.
 
 ## Simulation boundaries
 
