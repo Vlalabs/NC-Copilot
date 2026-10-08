@@ -23,7 +23,17 @@ In the cloud environment, use `npm ci --cache /workspace/.cache/npm` because the
 6. For an engineering referral, record a fictional opinion and a replacement or rejection disposition, then carry out the new resolution plan.
 7. Close the case and **Export record** to download the JSON record, decisions, references and audit trail.
 
-## What is simulated
+## Open the demo on the web
+
+The cloud environment onboarding screen does not display interactive app previews. To get a shareable web link, publish the static prototype through GitHub Pages:
+
+1. In this repository, open **Settings → Pages** and choose **GitHub Actions** as the build and deployment source.
+2. Open **Actions → Publish interactive demo → Run workflow**, select `main`, and start the workflow.
+3. When deployment completes, open the URL provided by the `github-pages` environment or the workflow deployment summary.
+
+The workflow is manual: code pushes do not automatically publish a site. It builds for the `/NC-Copilot/` subdirectory and publishes the compiled frontend. Browser case data remains local to each visitor.
+
+## Simulation boundaries
 
 - The assistant uses deterministic English/French keyword extraction and guided responses. It is not connected to an LLM.
 - MES, PLM and QMS records, historical examples, design criteria, repair instructions, reviewers and work orders are fictional fixtures. Nothing is sent to external systems.
