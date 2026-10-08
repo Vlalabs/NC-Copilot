@@ -129,3 +129,47 @@ test('local persistence preserves the case, strips preview URLs and rejects malf
   c.fields.depth = '0.2';
   assert.equal(restoreCase(JSON.stringify(c)), null);
 });
+
+test('assessment links each criterion to a source and separates acceptance from repair eligibility', () => {
+  const a = assess(scenarioCase('scratch').fields, true);
+  assert.equal(a.documents.length, 4);
+  assert.equal(a.criteria.length, 6);
+  for (const row of a.criteria) assert.ok(a.documents.some(d => d.id === row.source));
+  assert.equal(a.criteria.find(c => c.id === 'depth')?.status, 'fail');
+  assert.equal(a.criteria.find(c => c.id === 'process')?.status, 'pass');
+  assert.equal(a.recommended, 'repair');
+  assert.equal(assess(scenarioCase('bore').fields, true).recommended, 'rework');
+});
+
+test('missing instructions and conflicting revisions prevent a final disposition even within acceptance limits', () => {
+  const f = { ...scenarioCase('scratch').fields, depth: '0.03' };
+  for (const state of ['missing', 'conflict'] as const) {
+    const a = assess(f, true, state);
+    assert.equal(a.result, 'incomplete');
+    assert.equal(a.recommended, 'engineering');
+    assert.deepEqual(a.options, ['engineering']);
+    assert.ok(a.documents.some(d => d.status === state));
+  }
+});
+
+test('reject, scrap and exchange have distinct plans and rework still requires conforming final geometry', () => {
+  assert.ok(tasksFor('reject').some(t => /supplier return/.test(t.title)));
+  assert.ok(tasksFor('scrap').some(t => /permanent withdrawal/.test(t.title)));
+  assert.ok(tasksFor('exchange').some(t => /exchange unit/.test(t.title)));
+  const c = scenarioCase('bore');
+  const a = assess(c.fields, true);
+  assert.equal(finalInspection(c.fields, a, 'rework', { length: '', depth: '', diameter: '6.32', note: 'INS-DEMO' }).valid, false);
+  assert.equal(finalInspection(c.fields, a, 'rework', { length: '', depth: '', diameter: '6.02', note: 'INS-DEMO' }).valid, true);
+});
+
+test('older recorded cases gain document criteria without losing the approved decision or actions', () => {
+  const c = scenarioCase('scratch');
+  c.declared = true; c.categoryConfirmed = true; c.stage = 2;
+  c.disposition = 'repair'; c.decisionReason = 'Legacy reviewed repair'; c.tasks = tasksFor('repair');
+  c.tasks[0].done = true;
+  const { criteria, documents, documentState, ...legacy } = assess(c.fields, true);
+  const restored = restoreCase(JSON.stringify({ ...c, assessment: legacy }));
+  assert.equal(restored?.assessment?.criteria.length, 6);
+  assert.equal(restored?.disposition, 'repair');
+  assert.deepEqual(restored?.tasks, c.tasks);
+});

@@ -1,6 +1,9 @@
 // All references, rules and records in this prototype are fictional fixtures.
 export type Category = '' | 'surface' | 'dimensional' | 'crack' | 'other';
-export type Disposition = 'accept' | 'repair' | 'replace' | 'scrap' | 'engineering';
+export type Disposition = 'accept' | 'repair' | 'rework' | 'replace' | 'exchange' | 'reject' | 'scrap' | 'engineering';
+export type DocumentState = 'aligned' | 'missing' | 'conflict';
+export type ReviewDocument = { id: string; revision: string; title: string; kind: 'DAC' | 'Instruction' | 'Inspection' | 'Quality procedure'; section: string; scope: string; extract: string; status: 'consulted' | 'missing' | 'conflict' };
+export type AssessmentCriterion = { id: string; title: string; observed: string; rule: string; status: 'pass' | 'fail' | 'review' | 'unknown'; source: string; section: string };
 export type Fields = {
   observation: string; category: Category; program: string; msn: string;
   part: string; zone: string; material: string; lot: string;
@@ -15,6 +18,7 @@ export type Assessment = {
   result: 'accepted' | 'repairable' | 'outside' | 'incomplete' | 'unmatched';
   title: string; explanation: string; requirement: 'surface' | 'dimensional' | null;
   recommended: Disposition; options: Disposition[];
+  criteria: AssessmentCriterion[]; documents: ReviewDocument[]; documentState: DocumentState;
 };
 export type CaseState = {
   version: 1; id: string; stage: 0 | 1 | 2; declared: boolean; closed: boolean;
@@ -22,6 +26,7 @@ export type CaseState = {
   messages: Message[]; attachments: Attachment[]; audit: Audit[];
   assessment: Assessment | null; disposition: Disposition | null;
   decisionReason: string; tasks: Task[]; finalCheck: string;
+  documentState?: DocumentState;
 };
 export const LABELS: Record<FieldKey, string> = {
   observation: 'Observation', category: 'Defect type', program: 'Program', msn: 'MSN',
@@ -32,7 +37,7 @@ export const CATEGORY_NAMES: Record<Category, string> = {
   '': 'To classify', surface: 'Surface defect', dimensional: 'Dimensional deviation', crack: 'Suspected crack', other: 'Other defect',
 };
 export const DISPOSITION_NAMES: Record<Disposition, string> = {
-  accept: 'Use as is', repair: 'Repair / rework', replace: 'Replace', scrap: 'Reject / scrap', engineering: 'Engineering review',
+  accept: 'Accept as-is', repair: 'Repair', rework: 'Rework', replace: 'Replace', exchange: 'Exchange', reject: 'Reject', scrap: 'Scrap', engineering: 'Engineering review',
 };
 export const ZONES = ['Left wing', 'Right wing', 'Fuselage', 'Empennage', 'Nose / cockpit', 'Other area'];
 export const uid = () => crypto.randomUUID();
@@ -124,7 +129,7 @@ export const REFERENCES = {
     outside: 'Any other out-of-tolerance measurement requires engineering review.',
   },
 };
-export function assess(fields: Fields, categoryConfirmed: boolean): Assessment {
+function assessDimensions(fields: Fields, categoryConfirmed: boolean): Omit<Assessment, 'criteria' | 'documents' | 'documentState'> {
   const engineering: Disposition[] = ['engineering'];
   if (!categoryConfirmed || !fields.category) return { result: 'incomplete', title: 'Confirm the defect type', explanation: 'Confirm the suggested defect type before looking up an applicable requirement.', requirement: null, recommended: 'engineering', options: engineering };
   let requirement: Assessment['requirement'] = null;
@@ -146,15 +151,63 @@ export function assess(fields: Fields, categoryConfirmed: boolean): Assessment {
     repairable = d > 6.1 && d <= 6.5;
   }
   if (acceptable) return { result: 'accepted', title: 'Within acceptance limits', explanation: 'The measurements meet every criterion in the simulated requirement. Use as is can be proposed for review.', requirement, recommended: 'accept', options: ['accept', 'engineering'] };
-  if (repairable) return { result: 'repairable', title: 'Repair is possible', explanation: 'The defect exceeds acceptance limits but remains within the repair envelope of the simulated requirement. Repair instructions and a final inspection are required.', requirement, recommended: 'repair', options: ['repair', 'replace', 'scrap', 'engineering'] };
+  if (repairable) return { result: 'repairable', title: requirement === 'dimensional' ? 'Rework is possible' : 'Repair is possible', explanation: 'The defect exceeds acceptance limits but remains within the repair envelope of the simulated requirement. Applicable instructions and a final inspection are required.', requirement, recommended: requirement === 'dimensional' ? 'rework' : 'repair', options: [requirement === 'dimensional' ? 'rework' : 'repair', 'exchange', 'replace', 'reject', 'scrap', 'engineering'] };
   return { result: 'outside', title: 'Outside the repair envelope', explanation: 'The measurements exceed the range covered by this requirement. Further engineering review is needed before choosing a disposition.', requirement, recommended: 'engineering', options: engineering };
+}
+
+export function reviewDocuments(fields: Fields, categoryConfirmed: boolean, documentState: DocumentState = 'aligned'): ReviewDocument[] {
+  const base = assessDimensions(fields, categoryConfirmed);
+  const docs: ReviewDocument[] = [];
+  if (base.requirement) {
+    const r = REFERENCES[base.requirement];
+    docs.push({ id: r.id, revision: r.revision, title: r.title, kind: 'DAC', section: r.section, scope: r.scope, extract: `${r.acceptance}\n${r.repair}\n${r.outside}`, status: documentState === 'conflict' ? 'conflict' : 'consulted' });
+    docs.push({ id: base.requirement === 'surface' ? 'RI-SIM-014' : 'RI-SIM-022', revision: 'A', title: base.requirement === 'surface' ? 'Bracket surface repair instruction' : 'Fitting bore rework instruction', kind: 'Instruction', section: '§ 2 · Process applicability', scope: r.scope, extract: `${r.repair}\nApply only to the identified part and material. A conforming final inspection is required before release.`, status: documentState === 'missing' ? 'missing' : 'consulted' });
+    docs.push({ id: 'IP-SIM-007', revision: 'D', title: 'Post-disposition inspection plan', kind: 'Inspection', section: '§ 5 · Final verification', scope: r.scope, extract: `Record the final inspection reference and measurements. Acceptance: ${r.acceptance} Retain the result in the non-conformance record.`, status: 'consulted' });
+  }
+  docs.push({ id: 'QP-SIM-003', revision: 'B', title: 'Non-conformance disposition & referral', kind: 'Quality procedure', section: '§ 3 · Decision routing', scope: 'All demo non-conformance cases', extract: 'Refer to engineering when a requirement cannot be matched, measurements are missing, documents conflict, or the deviation exceeds a supported repair envelope. A suspected crack requires engineering review. Reject means hold or return the item; scrap means permanent withdrawal. No irreversible action occurs in this prototype.', status: 'consulted' });
+  return docs;
+}
+
+export function assess(fields: Fields, categoryConfirmed: boolean, documentState: DocumentState = 'aligned'): Assessment {
+  let base = assessDimensions(fields, categoryConfirmed);
+  const documents = reviewDocuments(fields, categoryConfirmed, documentState);
+  const criteria: AssessmentCriterion[] = [];
+  const add = (id: string, title: string, observed: string, rule: string, status: AssessmentCriterion['status'], source: string, section: string) => criteria.push({ id, title, observed, rule, status, source, section });
+  const r = base.requirement ? REFERENCES[base.requirement] : null;
+  add('scope', 'Configuration & material applicability', `${fields.program || 'Program missing'} · ${fields.part || 'Part missing'} · ${fields.material || 'Material missing'}`, r?.scope ?? 'Match the program, part, material and confirmed defect type to a controlled requirement.', r ? 'pass' : 'review', r?.id ?? 'QP-SIM-003', r ? '§ 1 · Applicability' : '§ 3 · Decision routing');
+  add('documents', 'Documentation consistency', documentState === 'aligned' ? 'Demo revisions aligned' : documentState === 'conflict' ? 'DAC revision conflict reported' : 'Repair / rework instruction unavailable', 'Use an aligned requirement revision and an available applicable instruction.', r && documentState === 'aligned' ? 'pass' : documentState === 'conflict' ? 'fail' : 'review', 'QP-SIM-003', '§ 3 · Decision routing');
+  if (base.requirement === 'surface') {
+    const d = measurement(fields.depth), l = measurement(fields.length);
+    add('depth', 'Surface depth', d === null ? 'Not measured' : `${fields.depth} mm`, 'Acceptance ≤ 0.05 mm', d === null ? 'unknown' : d <= 0.05 ? 'pass' : 'fail', r!.id, r!.section);
+    add('length', 'Defect length', l === null ? 'Not measured' : `${fields.length} mm`, 'Acceptance ≤ 30 mm', l === null ? 'unknown' : l <= 30 ? 'pass' : 'fail', r!.id, r!.section);
+  } else if (base.requirement === 'dimensional') {
+    const d = measurement(fields.diameter);
+    add('diameter', 'Bore diameter', d === null || d === 0 ? 'Not measured' : `${fields.diameter} mm`, 'Acceptance 5.90–6.10 mm', d === null || d === 0 ? 'unknown' : d >= 5.9 && d <= 6.1 ? 'pass' : 'fail', r!.id, r!.section);
+  } else {
+    add('measurements', 'Technical characterization', CATEGORY_NAMES[fields.category], 'Obtain an applicable requirement and documented inspection before concluding.', 'unknown', 'QP-SIM-003', '§ 3 · Decision routing');
+  }
+  const instruction = documents.find(d => d.kind === 'Instruction');
+  add('process', 'Repair / rework eligibility', base.result === 'repairable' ? 'Within the documented process envelope' : base.result === 'accepted' ? 'No corrective process required' : 'Eligibility not established', r?.repair ?? 'An engineering-approved instruction is required for this configuration.', instruction?.status === 'missing' ? 'review' : base.result === 'repairable' || base.result === 'accepted' ? 'pass' : 'review', instruction?.id ?? 'QP-SIM-003', instruction?.section ?? '§ 3 · Decision routing');
+  add('inspection', 'Final inspection & release', r ? 'Inspection plan matched; final result pending execution' : 'Engineering must define the verification plan', r?.acceptance ?? 'Record the required verification and result after disposition.', r ? 'pass' : 'review', r ? 'IP-SIM-007' : 'QP-SIM-003', r ? '§ 5 · Final verification' : '§ 3 · Decision routing');
+  if (r && documentState !== 'aligned') {
+    base = { ...base, result: 'incomplete', title: documentState === 'conflict' ? 'Conflicting documentation' : 'Required instruction missing', explanation: documentState === 'conflict' ? 'The DAC revision cannot be reconciled with the document set. Dimensional checks alone do not establish a disposition. Request engineering clarification.' : 'The applicable repair / rework instruction is unavailable. The measurements may be within an envelope, but the execution basis is incomplete. Request engineering guidance.', recommended: 'engineering', options: ['engineering'] };
+  }
+  return { ...base, criteria, documents, documentState };
+}
+
+export function assessmentReply(a: Assessment): string {
+  const gaps = a.criteria.filter(c => c.status !== 'pass').map(c => `${c.title}: ${c.observed} — ${c.rule}`).join('\n');
+  return `${a.title}.\nI reviewed ${a.criteria.length} criteria across ${a.documents.length} simulated documents.\n${a.explanation}${gaps ? `\n\nPoints to address:\n${gaps}` : ''}\n\n${a.recommended === 'engineering' ? 'Next action: request an engineering opinion. This is not a final disposition.' : `Proposed disposition: ${DISPOSITION_NAMES[a.recommended]}. The reviewer confirms the decision.`}\nSources: ${a.documents.map(d => `[${d.id}]`).join(' ')}`;
 }
 export function tasksFor(disposition: Disposition): Task[] {
   const task = (id: string, title: string, owner: string, kind: Task['kind'] = 'action'): Task => ({ id, title, owner, kind, done: false });
   switch (disposition) {
     case 'repair': return [task('order', 'Issue a repair work order', 'Manufacturing engineering'), task('perform', 'Carry out the repair / rework', 'Production'), task('inspect', 'Inspect the result and record measurements', 'Quality', 'inspection')];
+    case 'rework': return [task('order', 'Issue a rework work order', 'Manufacturing engineering'), task('perform', 'Carry out the rework to design requirements', 'Production'), task('inspect', 'Inspect the result and record measurements', 'Quality', 'inspection')];
     case 'replace': return [task('order', 'Issue a replacement work order', 'Supply chain'), task('perform', 'Replace and trace the new part', 'Production'), task('inspect', 'Inspect the replacement part', 'Quality', 'inspection')];
-    case 'scrap': return [task('isolate', 'Quarantine and identify the rejected part', 'Production'), task('scrap', 'Record the part rejection', 'Quality'), task('inspect', 'Verify rejection traceability', 'Quality', 'inspection')];
+    case 'exchange': return [task('order', 'Request a conforming exchange unit', 'Supply chain'), task('perform', 'Exchange the part and update unit traceability', 'Production'), task('inspect', 'Inspect the exchange unit and verify traceability', 'Quality', 'inspection')];
+    case 'reject': return [task('isolate', 'Quarantine and identify the rejected part', 'Production'), task('return', 'Route the rejected part for hold or supplier return', 'Supply chain'), task('inspect', 'Verify the rejection record and handover', 'Quality', 'inspection')];
+    case 'scrap': return [task('isolate', 'Quarantine and identify the item for scrap', 'Production'), task('scrap', 'Record permanent withdrawal and scrap authorization', 'Quality'), task('inspect', 'Verify scrap traceability and disposition record', 'Quality', 'inspection')];
     case 'accept': return [task('decision', 'Record the acceptance decision', 'Engineering'), task('inspect', 'Verify the release record', 'Quality', 'inspection')];
     case 'engineering': return [task('send', 'Send the case to engineering', 'Quality'), task('opinion', 'Receive and record the engineering opinion', 'Engineering', 'opinion')];
   }
@@ -178,7 +231,7 @@ export function invalidateAnalysis(c: CaseState, fields: Fields, origins = c.ori
 }
 export function finalInspection(fields: Fields, a: Assessment | null, disposition: Disposition, values: { length: string; depth: string; diameter: string; note: string }): { valid: boolean; summary: string } {
   if (!values.note.trim()) return { valid: false, summary: 'Record an inspection result or reference.' };
-  if (disposition === 'repair' && a?.requirement) {
+  if ((disposition === 'repair' || disposition === 'rework') && a?.requirement) {
     const f = { ...fields, length: values.length, depth: values.depth, diameter: values.diameter };
     const check = assess(f, true);
     if (check.result !== 'accepted') return { valid: false, summary: 'Final measurements do not meet acceptance limits. Correct the measurement or continue the resolution.' };
@@ -202,9 +255,15 @@ export function restoreCase(raw: string | null): CaseState | null {
     if (!Array.isArray(c.tasks) || c.tasks.some(t => !t || typeof t.id !== 'string' || typeof t.title !== 'string' || typeof t.owner !== 'string' || typeof t.done !== 'boolean' || !['action', 'inspection', 'opinion'].includes(t.kind))) return null;
     if (c.disposition !== null && !Object.hasOwn(DISPOSITION_NAMES, c.disposition)) return null;
     if (typeof c.decisionReason !== 'string' || typeof c.finalCheck !== 'string') return null;
+    if (c.documentState !== undefined && !['aligned', 'missing', 'conflict'].includes(c.documentState)) return null;
     if (c.assessment !== null) {
-      const recomputed = assess(c.fields, c.categoryConfirmed);
-      if (JSON.stringify(c.assessment) !== JSON.stringify(recomputed)) return null;
+      const recomputed = assess(c.fields, c.categoryConfirmed, c.documentState ?? 'aligned');
+      // Upgrade the earlier prototype's assessment presentation while retaining
+      // recorded decisions and tasks. Never migrate a changed dimensional result.
+      if (!Array.isArray(c.assessment.criteria)) {
+        if (c.assessment.result !== recomputed.result || c.assessment.requirement !== recomputed.requirement) return null;
+        c.assessment = recomputed;
+      } else if (JSON.stringify(c.assessment) !== JSON.stringify(recomputed)) return null;
     }
     if (c.stage > 0 && (!c.declared || !captureReady(c.fields))) return null;
     if (c.stage === 2 && (!c.assessment || !c.disposition || c.tasks.length === 0)) return null;

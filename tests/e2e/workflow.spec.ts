@@ -14,7 +14,7 @@ async function approve(page: Page, reason: string) {
   await page.getByRole('button', { name: 'Review disposition', exact: true }).first().click();
   await page.getByLabel('Decision rationale').fill(reason);
   await page.getByLabel('I have reviewed the case and the simulated reference.').check();
-  await page.getByRole('button', { name: 'Confirm disposition' }).click();
+  await page.getByRole('button', { name: /Confirm disposition|Send engineering request/ }).click();
 }
 
 test('welcome screen, workflow gates and keyboard-accessible source references', async ({ page }) => {
@@ -54,6 +54,7 @@ test('conversation to declaration, repair, failed and passed inspection, closure
   await page.getByRole('button', { name: 'Back to the case' }).click();
   await page.screenshot({ path: 'test-results/assessment-desktop.png', fullPage: true });
   await approve(page, 'Repair within DR-SIM-021 envelope, following RI-SIM-014.');
+  await page.screenshot({ path: 'test-results/execution-desktop.png', fullPage: true });
   await expect(page.getByRole('button', { name: 'Record inspection' })).toBeDisabled();
   await page.getByRole('button', { name: 'Mark complete' }).first().click();
   await page.getByRole('button', { name: 'Mark complete' }).click();
@@ -121,6 +122,7 @@ test('suspected crack routes to engineering, records its opinion and resolves th
 
 test('editing declared measurements invalidates old assessment and rejects negative input', async ({ page }) => {
   await scenario(page, 'A scratch on a bracket');
+  await page.getByRole('button', { name: 'Case record', exact: true }).click();
   await page.getByRole('button', { name: 'Edit Depth (mm)' }).click();
   await page.getByLabel('Depth (mm)', { exact: true }).fill('-1');
   await page.getByRole('button', { name: 'Save & confirm' }).click();
@@ -157,5 +159,68 @@ test('mobile layout fits the viewport and the aircraft map can start a case', as
   await page.getByRole('button', { name: 'Locate the defect' }).click();
   await page.getByRole('button', { name: 'Right wing', exact: true }).last().click();
   await expect(page.getByText('Right wing', { exact: true }).first()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('assessment exposes the criterion matrix, scoped documents and distinct disposition options', async ({ page }) => {
+  await scenario(page, 'A scratch on a bracket');
+  await expect(page.getByRole('heading', { name: 'Assessment conversation' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Assessment workspace' })).toBeVisible();
+  await expect(page.locator('.criterion-row.fail')).toContainText('Surface depth');
+  await expect(page.locator('.criterion-row.pass').filter({ hasText: 'Repair / rework eligibility' })).toBeVisible();
+  await page.getByRole('tab', { name: /Source documents/ }).click();
+  await expect(page.locator('.assessment-document')).toHaveCount(4);
+  await page.locator('.assessment-document').filter({ hasText: 'RI-SIM-014' }).click();
+  await expect(page.getByRole('dialog')).toContainText('Apply only to the identified part and material');
+  await page.getByRole('button', { name: 'Back to the case' }).click();
+  await page.getByRole('tab', { name: 'Disposition options' }).click();
+  await expect(page.locator('.disposition-tile').filter({ hasText: 'Reject' })).toBeEnabled();
+  await expect(page.locator('.disposition-tile').filter({ hasText: 'Scrap' })).toBeEnabled();
+  await expect(page.locator('.disposition-tile').filter({ hasText: 'Rework' })).toBeDisabled();
+  await page.locator('.disposition-tile').filter({ hasText: 'Exchange' }).click();
+  await expect(page.getByRole('radio', { name: 'Exchange', exact: true })).toBeChecked();
+  await page.getByLabel('Decision rationale').fill('Exchange for a traceable conforming unit.');
+  await page.getByLabel('I have reviewed the case and the simulated reference.').check();
+  await page.getByRole('button', { name: 'Confirm disposition' }).click();
+  await expect(page.getByRole('heading', { name: 'Execution workspace' })).toBeVisible();
+  await expect(page.getByText('Request a conforming exchange unit', { exact: true })).toBeVisible();
+});
+
+test('a document conflict reported in chat becomes an engineering action rather than a final disposition', async ({ page }) => {
+  await scenario(page, 'A scratch on a bracket');
+  await page.getByLabel('Message your copilot').fill('The DAC revision conflicts with the process instruction.');
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.getByRole('heading', { name: 'Conflicting documentation' })).toBeVisible();
+  await expect(page.getByLabel('Demo document set')).toHaveValue('conflict');
+  await page.getByRole('tab', { name: 'Disposition options' }).click();
+  await expect(page.locator('.disposition-tile:not(:disabled)')).toHaveCount(1);
+  await approve(page, 'Reconcile the DAC revision before choosing the disposition.');
+  await expect(page.getByRole('heading', { name: 'Get the opinion. Then decide.' })).toBeVisible();
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('nc-copilot-demo-v1')!));
+  expect(saved.disposition).toBe('engineering');
+  expect(saved.audit.at(-1).text).toContain('Engineering review requested');
+  await expect(page.getByRole('button', { name: 'Close the non-conformance' })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Get the opinion. Then decide.' })).toBeVisible();
+});
+
+test('assessment conversation can update a measured value and refresh the recommendation', async ({ page }) => {
+  await scenario(page, 'A scratch on a bracket');
+  await page.getByLabel('Message your copilot').fill('Measured depth: 0.03 mm');
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.getByRole('heading', { name: 'Within acceptance limits' })).toBeVisible();
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('nc-copilot-demo-v1')!));
+  expect(saved.fields.depth).toBe('0.03');
+  expect(saved.assessment.recommended).toBe('accept');
+  expect(saved.declared).toBe(true);
+});
+
+test('assessment and execution workspaces fit a mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await scenario(page, 'A scratch on a bracket');
+  await page.screenshot({ path: 'test-results/assessment-mobile.png', fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await approve(page, 'Repair using the applicable instruction.');
+  await page.screenshot({ path: 'test-results/execution-mobile.png', fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
